@@ -34,15 +34,13 @@ gat = torch.load("data/GAT.pt",weights_only=False)
 torch.manual_seed(123)
 np.random.seed(123)
 
-
-
 gcn.args.simple = True
 gat.args.simple = True
-
+z
 obs_vars = ['Purity', 'Ploidy', 'Tumor.Coverage', 'Normal.Coverage', 'Mutation.burden', 'Fraction.genome.altered', 'Mutation_count']
 obs_vars.append("Response")
 
-prepareData = PrepareAnnData(data = all, obs_vars=obs_vars, map = get_map(reactome_net, n_levels=3))
+prepareData = PrepareAnnData(data = all, obs_vars=obs_vars, map = get_map(reactome_net, n_levels=3))     
 adata, map = prepareData.anndata()
 demo = AnnDataToGraphData("data",
                             transform=RandomNodeSplit(split="random", num_train_per_class = 200, num_val=200, num_test=314), 
@@ -50,7 +48,6 @@ demo = AnnDataToGraphData("data",
                             adata = adata,
                             knn = 3)
 data = demo.data
-
 models = [gcn, gat]
 for model in models:
     for i in range(914):
@@ -99,4 +96,6 @@ for model in models:
             writer = csv.writer(f)
             writer.writerow(['index', 'importance'])
             writer.writerows(sorted_edge_importance)
+
+
 

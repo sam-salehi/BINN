@@ -7,9 +7,9 @@ from explain_runner import explain_and_save
 from bruno.nn.modules import Encoder
 from bruno.learn import Hyperparameters
 import pandas as pd 
-from encoder import ANN, GCN
+from encoder import ANN, GAT, GCN
 
-from learn import TrainModel
+from learn import TrainModel as MyTrainModel
 
   
 
@@ -25,6 +25,10 @@ def main() -> None:
     merged = load_and_merge_tables(data_dir)
     reactome_net = build_reactome_network(reactome_dir)
     data, adata, map_df = prepare_graph_data(merged, obs_vars, reactome_net, data_dir)
+
+
+    print(map_df)
+
 
 
     # s = map_df.apply(lambda x: pd.factorize(x)[0])
@@ -44,13 +48,13 @@ def main() -> None:
     args.cuda = (device.type == "cuda")
     args.device = device
     args.method = "ANN"
-    ann = ANN(map_df,args=args,bias=False)
-    train_ann = TrainModel(model=ann,graph=data,args=args)
+    model = ANN(map_df,args=args,bias=False)
+    train_ann = MyTrainModel(model=model,graph=data,args=args)
     train_ann.learn()
+    train_ann.plot_loss()
     # print(train_ann.metrics())
     # train_ann.plot_loss()
     quit()
-
 
     models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights") # runs too many.
 
