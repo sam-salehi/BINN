@@ -5,11 +5,13 @@ from data_utils import load_and_merge_tables, build_reactome_network, prepare_gr
 from training import train_models
 from explain_runner import explain_and_save
 from bruno.nn.modules import Encoder
-from bruno.learn import Hyperparameters, TrainModel
+from bruno.learn import Hyperparameters
 import pandas as pd 
-from encoder import ANN
+from encoder import ANN, GCN
 
+from learn import TrainModel
 
+  
 
 def main() -> None:
     data_dir = "data"
@@ -44,10 +46,13 @@ def main() -> None:
     args.method = "ANN"
     ann = ANN(map_df,args=args,bias=False)
     train_ann = TrainModel(model=ann,graph=data,args=args)
-    print(train_ann.metrics())
+    train_ann.learn()
+    # print(train_ann.metrics())
     # train_ann.plot_loss()
     quit()
-    models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights")
+
+
+    models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights") # runs too many.
 
     import matplotlib.pyplot as plt
     for m in ["ANN","GCNConv", "GATConv"]:
