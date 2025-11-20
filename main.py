@@ -8,6 +8,7 @@ from bruno.nn.modules import Encoder
 from bruno.learn import Hyperparameters
 import pandas as pd 
 from encoder import ANN, GAT, GCN
+import time 
 
 from learn import TrainModel as MyTrainModel
 
@@ -41,41 +42,47 @@ def main() -> None:
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-    args = Hyperparameters()
-    args.epochs = 2000
-    args.num_node_features = data.num_node_features
-    args.num_classes = int(len(data.y.unique()))
-    args.cuda = (device.type == "cuda")
-    args.device = device
-    args.method = "ANN"
-    model = ANN(map_df,args=args,bias=False)
-    train_ann = MyTrainModel(model=model,graph=data,args=args)
-    train_ann.learn()
-    train_ann.plot_loss()
-    # print(train_ann.metrics())
+    # args = Hyperparameters()
+    # args.epochs = 2000
+    # args.num_node_features = data.num_node_features
+    # args.num_classes = int(len(data.y.unique()))
+    # args.cuda = (device.type == "cuda")
+    # args.device = device
+    # args.method = "GATConv"
+    # model = GAT(map_df,args=args,bias=False)
+    # train_ann = MyTrainModel(model=model,graph=data,args=args)
+    # train_ann.learn()
     # train_ann.plot_loss()
-    quit()
+    # # print(train_ann.metrics())
+    # # train_ann.plot_loss()
+    # quit()
 
-    models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights") # runs too many.
+    start = time.perf_counter()
 
-    import matplotlib.pyplot as plt
-    for m in ["ANN","GCNConv", "GATConv"]:
-        trainer = trainers[m]
-        trainer.metrics()
-        plt.show()
-        trainer.plot_loss()
-        plt.show()
-        trainer.plot_pca()
-        plt.show()
+    models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights") 
 
-        # trainer.plot_tsne() FIXME: segfaults.
-
-        trainer.plot_weights_of_last_layer()
-        # trainer.plot_subnetwork()
-        plt.show()
+    end = time.perf_counter()
+    print(f"Execution time: {end - start:.6f} seconds")
 
 
-    print("Generating explanation")
+    # import matplotlib.pyplot as plt
+    # for m in ["ANN","GCNConv", "GATConv"]:
+    #     trainer = trainers[m]
+    #     trainer.metrics()
+    #     plt.show()
+    #     trainer.plot_loss()
+    #     plt.show()
+    #     trainer.plot_pca()
+    #     plt.show()
+
+    #     # trainer.plot_tsne() FIXME: segfaults.
+
+    #     trainer.plot_weights_of_last_layer()
+    #     # trainer.plot_subnetwork()
+    #     plt.show()
+
+
+    # print("Generating explanation")
 
     # explain_and_save(models, data, device=device, outputs_root=outputs_root, return_type="log_probs", epochs=200, max_nodes=None)
 

@@ -19,9 +19,6 @@ class TrainModel():
         self.model = model.to(self.args.device)
         self.graph = graph.to(self.args.device)
 
-        print(model.map_f)
-        # quit()
-        # self.mask = self.convert_map(self.model,self.args)
 
         if self.args.num_classes == None:
             self.criterion = nn.MSELoss()
@@ -56,39 +53,11 @@ class TrainModel():
         y_true = self.graph.y[self.graph.train_mask]
 
         self.optim.zero_grad()
-        y_pred, outputs = self.model(self.graph.x,self.graph.edge_index) # what do graph.x and graph.edge_index look like?
+        y_pred, outputs = self.model(self.graph.x,self.graph.edge_index)
         loss = self.criterion(y_pred[self.graph.train_mask],y_true)
         loss.backward()
         self.optim.step()
 
-        # setting weights to zero using map. # TODO replace by pruning in ecnoder. No convert_map. 
-        w = {}
-        for name, param in self.model.named_parameters():
-            if self.args.method == "GCNConv":
-                if re.search(".0.lin.weight", name):
-                    weights = param.cpu().clone()
-                    weights = weights * self.mask[name]
-                    weights = F.normalize(weights, p=2, dim=1)
-                    w[name] = weights
-                    self.model.state_dict()[name].data.copy_(weights)
-            elif self.args.method == "GATConv":
-                if re.search(".0.lin_src.weight", name):
-                    weights = param.cpu().clone()
-                    weights = weights * self.mask[name]
-                    weights = F.normalize(weights, p=2, dim=1)
-                    w[name] = weights
-                    self.model.state_dict()[name].data.copy_(weights)
-            else:
-                print("B")
-                if re.search("0.weight", name):
-                    print("C")
-                    weights = param.cpu().clone()
-                    weights = weights * self.mask[name]
-                    weights = F.normalize(weights, p=2, dim=1)
-                    w[name] = weights
-                    self.model.state_dict()[name].data.copy_(weights)
-    
-        self.weights.append(w)
         return loss.data.item()
 
 
@@ -122,36 +91,3 @@ class TrainModel():
         return w.pivot(index=['0'], columns=['1']).fillna(0)
 
         
-
-    def convert_map(self,model,args):
-        map = model.map_f
-        method =args.method 
-        n_classes =  args.num_classes 
-        p = map.nunique().tolist()
-        if method == "GCNConv":
-            mask = dict([(''.join(["layers.", str(i), ".0.lin.weight"]), torch.tensor(np.transpose(self.weights(map, i).to_numpy()))) for i in range(len(map.columns)-1)])
-        elif method == "GATConv":
-            mask = dict([(''.join(["layers.", str(i), ".0.lin_src.weight"]), torch.tensor(np.transpose(self.weights(map, i).to_numpy()))) for i in range(len(map.columns)-1)])
-        else:
-            mask = dict([(''.join(["layers.", str(i), ".0.weight"]), torch.tensor(np.transpose(self.weights(map, i).to_numpy()))) for i in range(len(map.columns)-1)])
-        
-        if n_classes is not None:
-            mask['layers.'+str(len(mask))+'.0.weight'] = torch.ones(n_classes, p[len(p)-1])
-        else:
-            ## get weight names
-            weight_names = []
-            for name, param in model.named_parameters():
-                if method == "GCNConv":
-                    if re.search(".0.lin.weight", name):
-                        weight_names.append(name)
-                elif method == "GATConv":
-                    if re.search(".0.lin_src.weight", name):
-                        weight_names.append(name)
-                else:
-                    if re.search("0.weight", name):
-                        weight_names.append(name)
-            mask0 = {}
-            for i, key in enumerate(mask.keys()):
-                mask0[weight_names[i]] = mask[key]
-            mask = mask0
-        return mask

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.utils.prune as prune
 import torch_geometric
 from torch_geometric.nn import GCNConv, GATConv, Linear
 import torch.nn.functional as F
@@ -14,7 +15,7 @@ class Encoder(nn.Module):
         self.map_f = self.map.apply(lambda x: pd.factorize(x)[0])
         self.args = args
         self.bias = bias
-        self.masks = self.generate_masks(self.map_f)
+
  
 
         if self.map.shape[0] == 2:
@@ -23,6 +24,8 @@ class Encoder(nn.Module):
             units = list(self.map_f.nunique())
         units[0] = self.args.num_node_features
         self.units = units 
+
+        self.masks = self.generate_masks(self.map_f)
         self.modules = []
 
 
@@ -49,38 +52,32 @@ class Encoder(nn.Module):
         Generates a list of binary masks (torch.FloatTensor) to be used with torch.nn.utils.prune.
         For each consecutive pair of columns in the factorized map `map_f`, creates a mask matrix
         of shape (n_next, n_curr) where entry (to, from) == 1.0 if there exists at least one
-        item mapping from group `from` at level i to group `to` at level i+1. Values of -1 are ignored.
+        item mapping from group `from` at level i to group `to` at level i+1.
         '''
-        # Ensure DataFrame input
-        if not isinstance(map_f, pd.DataFrame):
-            map_f = pd.DataFrame(map_f)
 
         num_levels = map_f.shape[1]
         masks: list[torch.Tensor] = []
 
         for level_idx in range(num_levels - 1):
-            left = map_f.iloc[:, level_idx].to_numpy()
-            right = map_f.iloc[:, level_idx + 1].to_numpy()
+            left = map_f.iloc[:, level_idx].to_numpy().astype(np.int64)
+            right = map_f.iloc[:, level_idx + 1].to_numpy().astype(np.int64)
 
-            # Ignore missing (-1) codes from pandas.factorize
-            valid = (left >= 0) & (right >= 0)
-            left_codes = left[valid].astype(np.int64)
-            right_codes = right[valid].astype(np.int64)
-
-            # Determine group counts
-            n_left = int(left_codes.max() + 1) if left_codes.size > 0 else int(max(0, (left[left >= 0].max() + 1)) if (left >= 0).any() else 0)
-            n_right = int(right_codes.max() + 1) if right_codes.size > 0 else int(max(0, (right[right >= 0].max() + 1)) if (right >= 0).any() else 0)
+            # Determine group counts directly
+            n_left = int(left.max() + 1) if left.size > 0 else 0
+            n_right = int(right.max() + 1) if right.size > 0 else 0
 
             mask_np = np.zeros((n_right, n_left), dtype=np.float32)
-            if left_codes.size > 0:
-                mask_np[right_codes, left_codes] = 1.0
+            if left.size > 0:
+                mask_np[right, left] = 1.0
 
             masks.append(torch.from_numpy(mask_np))
 
+        # TODO: write test to make sure dimesnisons match with self.units        
 
         if self.args.num_classes is not None:
             output_size = masks[-1].shape[0]
             masks.append(torch.ones((self.args.num_classes,output_size),dtype=torch.float32))
+
 
         return masks
 
@@ -94,29 +91,23 @@ class ANN(Encoder):
         assert args.method == "ANN"
 
         for i in range(len(self.units) - 1):
+
+            linear =  Linear(self.units[i],self.units[i+1],bias=self.bias)
+            prune.custom_from_mask(linear,"weight",self.masks[i])
+
             self.modules.append(nn.Sequential(
-                Linear(self.units[i],self.units[i+1],bias=self.bias),
+                linear,
                 nn.BatchNorm1d(self.units[i+1])
             ))
     
         if self.args.num_classes is not None:
-            self.modules.append(nn.Sequential(nn.Linear(self.units[-1],self.args.num_classes,bias = self.bias)))
+            cls_linear = nn.Linear(self.units[-1],self.args.num_classes,bias = self.bias)
+            # Apply final all-ones mask if provided
+            if len(self.masks) == len(self.units):  # extra mask added for classifier
+                prune.custom_from_mask(cls_linear, "weight", self.masks[-1])
+            self.modules.append(nn.Sequential(cls_linear))
         self.layers = nn.Sequential(*self.modules)
 
-
-
-    
-    # def forward(self,data,edge_index=None):
-    #     x = data 
-
-    #     outputs = [] # outputs of each layer on the way there. 
-
-    #     for i, seq_module in enumerate(self.layers):
-    #         x = seq_module(x)
-    #         if i < len(self.layers) - 1:
-    #             x = F.relu(x)
-    #         outputs.append(x.cpu().detach())
-    #     return x, outputs
 
 class GCN(Encoder):
     def __init__(self,map,args,bias:bool=True):
@@ -124,11 +115,12 @@ class GCN(Encoder):
         assert len(self.modules) == 0
         assert args.method == "GCNConv"
 
-    
-        self.modules = [nn.Sequential(
-            GCNConv(self.units[i],self.units[i+1],bias=self.bias),
-            nn.BatchNorm1d(self.units[i+1])
-        ) for i in range(len(self.units)-1)]
+        for i in range(len(self.units)-1):
+            conv = GCNConv(self.units[i],self.units[i+1],bias=self.bias)
+            # GCNConv stores parameters in the internal Linear module `lin`
+            prune.custom_from_mask(conv.lin,"weight",self.masks[i])
+
+            self.modules.append(nn.Sequential(conv, nn.BatchNorm1d(self.units[i+1])))
 
         if self.args.num_classes is not None:
             self.modules.append(nn.Sequential(nn.Linear(self.units[-1],self.args.num_classes,bias=self.bias)))
@@ -141,10 +133,14 @@ class GAT(Encoder):
         assert len(self.modules) == 0
         assert args.method == "GATConv"
 
-        self.modules = [nn.Sequential(
-            GATConv(self.units[i],self.units[i+1],bias=self.bias,heads=heads),
-            nn.BatchNorm1d(self.units[i+1])
-        ) for i in range(len(self.units)-1)]
+        for i in range(len(self.units)-1):
+            GAT = GATConv(self.units[i],self.units[i+1],bias=self.bias,heads=heads)
+            prune.custom_from_mask(GAT.lin,"weight",self.masks[i])
+
+            self.modules.append(nn.Sequential(
+                GAT,
+                nn.BatchNorm1d(self.units[i+1])
+            ))
 
         if self.args.num_classes is not None:
             self.modules.append(nn.Sequential(nn.Linear(self.units[-1],self.args.num_classes,bias=self.bias)))
