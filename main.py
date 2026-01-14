@@ -10,6 +10,8 @@ import pandas as pd
 from encoder import ANN, GAT, GCN
 import time 
 
+from base import Model
+
 from learn import TrainModel as MyTrainModel
 
   
@@ -28,8 +30,19 @@ def main() -> None:
     data, adata, map_df = prepare_graph_data(merged, obs_vars, reactome_net, data_dir)
 
 
-    print(map_df)
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+    # print(map_df)
+    args = Hyperparameters()
+    args.epochs = 2000
+    args.num_node_features = data.num_node_features
+    args.num_classes = int(len(data.y.unique()))
+    args.cuda = (device.type == "cuda")
+    args.device = device
+    args.method = "ANN"
 
+
+    adata = Model.setup_anndata(adata)
+    model = Model(adata,map_df,args)
 
 
     # s = map_df.apply(lambda x: pd.factorize(x)[0])
@@ -40,7 +53,6 @@ def main() -> None:
     # print(data)
     # print(adata)
 
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
     # args = Hyperparameters()
     # args.epochs = 2000
@@ -57,12 +69,12 @@ def main() -> None:
     # # train_ann.plot_loss()
     # quit()
 
-    start = time.perf_counter()
+    # start = time.perf_counter()
 
-    models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights") 
+    # models, trainers= train_models(data, map_df, device=device, epochs=400, patience=200, save_dir="./data/weights") 
 
-    end = time.perf_counter()
-    print(f"Execution time: {end - start:.6f} seconds")
+    # end = time.perf_counter()
+    # print(f"Execution time: {end - start:.6f} seconds")
 
 
     # import matplotlib.pyplot as plt

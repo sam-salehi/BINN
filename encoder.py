@@ -71,8 +71,7 @@ class Encoder(nn.Module):
                 mask_np[right, left] = 1.0
 
             masks.append(torch.from_numpy(mask_np))
-
-        # TODO: write test to make sure dimesnisons match with self.units        
+     
 
         if self.args.num_classes is not None:
             output_size = masks[-1].shape[0]
