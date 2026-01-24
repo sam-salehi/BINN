@@ -1,21 +1,30 @@
 """
-Main entry point for training ANN models using scvi-tools BaseModelClass.
-This script demonstrates how to use the new PyTorch Lightning-based training.
+Main entry point for training ANN, GCN, and GAT models using scvi-tools BaseModelClass.
+This script trains all three models and compares their performance on the test set.
 """
 
 import os
 import torch
-import time
 from data_utils import load_and_merge_tables, build_reactome_network, prepare_graph_data
-from training_scvi import train_ann_model
+from training_scvi import train_ann_model, train_gcn_model, train_gat_model
+
+
+def evaluate_model(model, graph_data, mask):
+    """Evaluate model accuracy on a given mask."""
+    predictions = model.predict(mask=mask)
+    pred_classes = predictions.argmax(dim=1)
+    true_labels = graph_data.y[mask]
+    correct = (pred_classes == true_labels).sum().item()
+    total = mask.sum().item()
+    accuracy = correct / total
+    return accuracy
 
 
 def main() -> None:
-    """Main function to train ANN model with scvi-tools integration."""
+    """Main function to train and compare ANN, GCN, and GAT models."""
     # Data directory setup
     data_dir = "data"
     reactome_dir = os.path.join(data_dir, "reactome")
-    outputs_root = "./outputs"
     
     # Define clinical variables and observation variables
     clin_vars = [
@@ -53,14 +62,21 @@ def main() -> None:
     lr = 1e-3
     weight_decay = 1e-5
     
-    # Train the ANN model
-    start = time.perf_counter()
+    num_node_features = data.num_node_features
+    num_classes = int(len(data.y.unique()))
     
-    model = train_ann_model(
+    # Dictionary to store results
+    results = {}
+    
+    # Train ANN model
+    print("\n" + "="*60)
+    print("Training ANN model...")
+    print("="*60)
+    ann_model = train_ann_model(
         graph_data=data,
         map_df=map_df,
-        num_node_features=data.num_node_features,
-        num_classes=int(len(data.y.unique())),
+        num_node_features=num_node_features,
+        num_classes=num_classes,
         device=device,
         epochs=epochs,
         patience=patience,
@@ -68,26 +84,71 @@ def main() -> None:
         weight_decay=weight_decay,
         bias=False,
         save_path="./data/weights/ANN_scvi.pt",
-        adata=adata,  # Pass adata for scvi-tools BaseModelClass
+        adata=adata,
     )
+    results['ANN'] = ann_model
     
-    end = time.perf_counter()
-    print(f"\nTraining completed in {end - start:.2f} seconds")
+    # Train GCN model
+    print("\n" + "="*60)
+    print("Training GCN model...")
+    print("="*60)
+    gcn_model = train_gcn_model(
+        graph_data=data,
+        map_df=map_df,
+        num_node_features=num_node_features,
+        num_classes=num_classes,
+        device=device,
+        epochs=epochs,
+        patience=patience,
+        lr=lr,
+        weight_decay=weight_decay,
+        bias=False,
+        save_path="./data/weights/GCN_scvi.pt",
+        adata=adata,
+    )
+    results['GCN'] = gcn_model
     
-    # Example: Get predictions on test set
+    # Train GAT model
+    print("\n" + "="*60)
+    print("Training GAT model...")
+    print("="*60)
+    gat_model = train_gat_model(
+        graph_data=data,
+        map_df=map_df,
+        num_node_features=num_node_features,
+        num_classes=num_classes,
+        device=device,
+        epochs=epochs,
+        patience=patience,
+        lr=lr,
+        weight_decay=weight_decay,
+        bias=False,
+        heads=1,
+        save_path="./data/weights/GAT_scvi.pt",
+        adata=adata,
+    )
+    results['GAT'] = gat_model
+    
+    # Compare performances on test set
+    print("\n" + "="*60)
+    print("Model Performance Comparison (Test Set)")
+    print("="*60)
+    
     if hasattr(data, 'test_mask'):
-        print("\nGetting predictions on test set...")
-        predictions = model.predict(mask=data.test_mask)
-        print(f"Predictions shape: {predictions.shape}")
-    
-    # Example: Get latent representations
-    print("\nGetting latent representations...")
-    latent = model.get_latent_representation()
-    print(f"Latent representation shape: {latent.shape}")
+        for model_name, model in results.items():
+            accuracy = evaluate_model(model, data, data.test_mask)
+            print(f"{model_name}: Test Accuracy = {accuracy:.4f} ({accuracy*100:.2f}%)")
+        
+        # Find best model
+        accuracies = {name: evaluate_model(model, data, data.test_mask) 
+                      for name, model in results.items()}
+        best_model = max(accuracies, key=accuracies.get)
+        print(f"\nBest performing model: {best_model} with {accuracies[best_model]*100:.2f}% accuracy")
+    else:
+        print("Warning: No test_mask found in data. Cannot evaluate on test set.")
     
     print("\nDone!")
 
 
 if __name__ == "__main__":
     main()
-
