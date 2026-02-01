@@ -2,8 +2,9 @@ from typing import Dict, Optional
 import torch
 
 from bruno.nn.modules import Encoder
-from bruno.learn import Hyperparameters, TrainModel
-
+from bruno.learn import Hyperparameters
+from learn import TrainModel
+from encoder import ANN, GAT, GCN
 
 def train_models(
     data,
@@ -24,7 +25,7 @@ def train_models(
     trained: Dict[str, torch.nn.Module] = {}
     trainers = {}
 
-    for method in ["ANN", "GCNConv", "GATConv"]:
+    for method, model in zip(["ANN", "GCNConv", "GATConv"],[ANN,GCN,GAT]):
         args.method = method
         model = Encoder(map_df, args=args, bias=False)
         trainer = TrainModel(model=model, graph=data, args=args)
