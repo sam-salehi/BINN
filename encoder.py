@@ -51,7 +51,6 @@ class Encoder(nn.Module):
                     x = F.relu(layer(x,edge_index))
             # Keep tensors on device during forward pass (don't convert to numpy)
             outputs.append(x.detach())
-        
         return x, outputs
 
 
@@ -80,7 +79,7 @@ class Encoder(nn.Module):
 
             masks.append(torch.from_numpy(mask_np))
 
-        # TODO: write test to make sure dimesnisons match with self.units        
+        # TODO: write test to make sure dimensions match with self.units        
 
         if self.args.num_classes is not None:
             output_size = masks[-1].shape[0]
@@ -416,7 +415,7 @@ class GraphModel(BaseModelClass):
             enable_progress_bar=True,
             **train_kwargs
         )
-        
+    
         # Train
         trainer.fit(training_plan, train_dataloaders=dummy_loader, val_dataloaders=dummy_loader)
         
