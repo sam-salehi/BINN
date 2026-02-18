@@ -1,6 +1,5 @@
 from .models import ANN, GCN, GAT
 from .scvi_models import GraphModel, GraphModelFactory
-from .hparams import Hyperparameters
 
 __all__ = [
     "ANN",
@@ -8,5 +7,4 @@ __all__ = [
     "GAT",
     "GraphModel",
     "GraphModelFactory",
-    "Hyperparameters",
 ]

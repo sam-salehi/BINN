@@ -5,7 +5,7 @@ Single entry point: train_graph_model(name, graph_data, map_df, config).
 
 import torch
 from nn import GraphModel, GraphModelFactory
-from nn.hparams import Hyperparameters
+from learn import Hyperparameters
 
 
 def train_graph_model(

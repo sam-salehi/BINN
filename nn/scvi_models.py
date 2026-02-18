@@ -14,7 +14,7 @@ from scvi.data import AnnDataManager
 from scvi.data.fields import LayerField
 
 from .models import ANN, GCN, GAT
-from .hparams import Hyperparameters
+from learn.hparams import Hyperparameters
 
 
 # ---------------------------------------------------------------------------
