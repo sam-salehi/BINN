@@ -1,6 +1,6 @@
 """
-scvi-tools integration: GraphEncoderModule, GraphTrainingPlan, GraphModel, create_graph_model.
-Depends on .models for Encoder/ANN/GCN/GAT.
+scvi-tools integration: GraphEncoderModule, GraphTrainingPlan, GraphModel, GraphModelFactory.
+Depends on .models for Encoder/ANN/GCN/GAT and .hparams for Hyperparameters.
 """
 import torch
 import torch.nn as nn
@@ -13,84 +13,84 @@ from scvi.module.base import BaseModuleClass
 from scvi.data import AnnDataManager
 from scvi.data.fields import LayerField
 
-from .models import Encoder, ANN, GCN, GAT
+from .models import ANN, GCN, GAT
+from .hparams import Hyperparameters
 
 
 # ---------------------------------------------------------------------------
-# Graph model factory: register encoder types, create GraphModel by name
+# Factory
 # ---------------------------------------------------------------------------
 
 class GraphModelFactory:
     """
-    Registry-based factory for GraphModel. Register encoder classes by method name;
-    then create models with create() or create_graph_model(). Encoder-specific options
-    (e.g. heads for GAT) are passed as kwargs to create() and forwarded to the encoder.
-    Optional per-method args_method (for TrainingArgs) and train_kwargs (e.g. accelerator
-    for PyTorch Lightning) let training code stay method-agnostic.
+    Registry-based factory. Register encoder classes once; create fully-configured
+    GraphModel instances from a Hyperparameters config + graph data.
     """
     _registry: dict[str, type] = {}
     _default_encoder_kwargs: dict[str, dict] = {}
-    _args_method: dict[str, str] = {}  # method name -> value for args.method (encoder assertion)
-    _train_kwargs: dict[str, dict] = {}  # method name -> extra kwargs for model.train()
+    _args_method: dict[str, str] = {}
+    _train_kwargs: dict[str, dict] = {}
 
     @classmethod
     def register(
         cls,
-        method: str,
+        name: str,
         encoder_class: type,
-        default_encoder_kwargs: dict | None = None,
+        *,
         args_method: str | None = None,
+        default_encoder_kwargs: dict | None = None,
         train_kwargs: dict | None = None,
     ):
-        """Register an encoder. args_method is the value for args.method; train_kwargs are passed to model.train()."""
-        cls._registry[method] = encoder_class
-        cls._default_encoder_kwargs[method] = dict(default_encoder_kwargs or {})
-        cls._args_method[method] = args_method if args_method is not None else method
-        cls._train_kwargs[method] = dict(train_kwargs or {})
+        """
+        Register an encoder class.
+        name: key callers use ("ANN", "GCN", "GAT").
+        args_method: value the encoder asserts on args.method (e.g. "GCNConv").
+        default_encoder_kwargs: merged into encoder kwargs unless overridden.
+        train_kwargs: extra kwargs merged into model.train() (e.g. accelerator="cpu").
+        """
+        cls._registry[name] = encoder_class
+        cls._args_method[name] = args_method if args_method is not None else name
+        cls._default_encoder_kwargs[name] = dict(default_encoder_kwargs or {})
+        cls._train_kwargs[name] = dict(train_kwargs or {})
 
     @classmethod
-    def get_args_method(cls, method: str) -> str:
-        """Return the args.method value to use for this registered method."""
-        if method not in cls._registry:
-            raise ValueError(f"Unknown method {method!r}. Registered: {list(cls._registry)}")
-        return cls._args_method[method]
-
-    @classmethod
-    def get_train_kwargs(cls, method: str) -> dict:
-        """Return extra kwargs to pass to model.train() for this method (e.g. accelerator='cpu' for GAT)."""
-        return dict(cls._train_kwargs.get(method, {}))
+    def get_train_kwargs(cls, name: str) -> dict:
+        return dict(cls._train_kwargs.get(name, {}))
 
     @classmethod
     def create(
         cls,
-        method: str,
+        name: str,
         map_df,
         graph_data,
-        args,
+        config: Hyperparameters,
         *,
-        bias: bool = True,
-        lr: float = 1e-3,
-        weight_decay: float = 1e-5,
         adata=None,
-        registry=None,
         **encoder_kwargs,
     ) -> "GraphModel":
-        """Build a GraphModel by method name. encoder_kwargs (e.g. heads=2) are passed to the encoder."""
-        encoder_class = cls._registry.get(method)
+        """
+        Build a GraphModel. All hyperparams come from config; encoder_kwargs
+        override defaults (e.g. heads=2).
+        """
+        encoder_class = cls._registry.get(name)
         if encoder_class is None:
-            raise ValueError(f"Unknown method {method!r}. Registered: {list(cls._registry)}")
-        defaults = cls._default_encoder_kwargs.get(method, {})
-        kwargs = {**defaults, **encoder_kwargs}
-        encoder = encoder_class(map_df, args=args, bias=bias, **kwargs)
+            raise ValueError(f"Unknown method {name!r}. Registered: {list(cls._registry)}")
+
+        args_method = cls._args_method[name]
+        hp = config.for_method(args_method)
+
+        defaults = cls._default_encoder_kwargs.get(name, {})
+        enc_kw = {**defaults, **encoder_kwargs}
+        if "heads" in defaults and "heads" not in encoder_kwargs:
+            enc_kw["heads"] = config.heads
+
+        encoder = encoder_class(map_df, args=hp, bias=hp.bias, **enc_kw)
+
         return GraphModel(
             encoder=encoder,
             graph_data=graph_data,
-            num_node_features=args.num_node_features,
-            num_classes=args.num_classes,
-            lr=lr,
-            weight_decay=weight_decay,
+            config=config,
             adata=adata,
-            registry=registry,
         )
 
 
@@ -98,175 +98,97 @@ GraphModelFactory.register("ANN", ANN, args_method="ANN")
 GraphModelFactory.register("GCN", GCN, args_method="GCNConv")
 GraphModelFactory.register(
     "GAT", GAT,
-    default_encoder_kwargs={"heads": 1},
     args_method="GATConv",
-    train_kwargs={"accelerator": "cpu"},  # MPS scatter ops not fully supported FIXME: figure out what this means.
+    default_encoder_kwargs={"heads": 1},
+    train_kwargs={"accelerator": "cpu"},
 )
 
 
+# scvi-tools wrappers
+
+
 class GraphEncoderModule(BaseModuleClass):
-    """
-    scvi-tools BaseModuleClass wrapper for graph-based encoders.
-    Wraps the Encoder classes to work with scvi-tools training infrastructure.
-    """
-    def __init__(
-        self,
-        encoder: nn.Module,
-        num_node_features: int,
-        num_classes: int = None,
-        lr: float = 1e-3,
-        weight_decay: float = 1e-5,
-    ):
+    """Wraps an Encoder to work with scvi-tools training infrastructure."""
+    def __init__(self, encoder: nn.Module, config: Hyperparameters):
         super().__init__()
         self.encoder = encoder
-        self.num_node_features = num_node_features
-        self.num_classes = num_classes
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        if num_classes is None:
-            self.criterion = nn.MSELoss()
-        else:
-            self.criterion = nn.CrossEntropyLoss()
+        self.config = config
+        self.criterion = nn.MSELoss() if config.num_classes is None else nn.CrossEntropyLoss()
 
     def forward(self, x, edge_index, mask=None):
-        """
-        Forward pass through the encoder.
-
-        Args:
-            x: Node features tensor
-            edge_index: Edge index tensor for graph convolutions
-            mask: Optional mask to select specific nodes
-
-        Returns:
-            output: Model predictions
-            outputs: Intermediate layer outputs
-        """
         output, outputs = self.encoder(x, edge_index)
         return output, outputs
 
     def loss(self, output, y_true, mask=None):
         if mask is not None:
             return self.criterion(output[mask], y_true[mask])
-        else:
-            return self.criterion(output, y_true)
+        return self.criterion(output, y_true)
 
     def inference(self, x, edge_index):
-        """Inference method for getting model predictions."""
         self.eval()
         with torch.no_grad():
-            output, outputs = self.forward(x, edge_index)
-        return output, outputs
+            return self.forward(x, edge_index)
 
 
 class GraphTrainingPlan(LightningModule):
-    """
-    PyTorch Lightning module for graph-based models with train/val/test masks.
-    """
-    def __init__(
-        self,
-        module: GraphEncoderModule,
-        graph_data,
-        lr: float = 1e-3,
-        weight_decay: float = 1e-5,
-    ):
+    """PyTorch Lightning module for full-batch graph training with train/val masks."""
+    def __init__(self, module: GraphEncoderModule, graph_data, config: Hyperparameters):
         super().__init__()
         self.module = module
         self.graph_data = graph_data
         self.train_mask = graph_data.train_mask
         self.val_mask = graph_data.val_mask
         self.y = graph_data.y
-        self.lr = lr
-        self.weight_decay = weight_decay
+        self.config = config
 
     def training_step(self, batch, batch_idx):
-        """Training step for graph data."""
         x = self.graph_data.x.to(self.device)
         edge_index = self.graph_data.edge_index.to(self.device)
         y_true = self.y.to(self.device)
-        train_mask = self.train_mask.to(self.device)
-
-        output, outputs = self.module(x, edge_index, mask=train_mask)
-        loss = self.module.loss(output, y_true, mask=train_mask)
-
+        mask = self.train_mask.to(self.device)
+        output, _ = self.module(x, edge_index, mask=mask)
+        loss = self.module.loss(output, y_true, mask=mask)
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        """Validation step for graph data."""
         x = self.graph_data.x.to(self.device)
         edge_index = self.graph_data.edge_index.to(self.device)
         y_true = self.y.to(self.device)
-        val_mask = self.val_mask.to(self.device)
-
-        output, outputs = self.module(x, edge_index, mask=val_mask)
-        loss = self.module.loss(output, y_true, mask=val_mask)
-
+        mask = self.val_mask.to(self.device)
+        output, _ = self.module(x, edge_index, mask=mask)
+        loss = self.module.loss(output, y_true, mask=mask)
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
-        """Configure optimizer for training."""
-        optimizer = torch.optim.Adam(
+        return torch.optim.Adam(
             self.module.parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay,
+            lr=self.config.lr,
+            weight_decay=self.config.w_decay,
         )
-        return optimizer
 
 
 class GraphModel(BaseModelClass):
+    """High-level API: create, train, predict, get_latent_representation."""
     def __init__(
         self,
         encoder: nn.Module,
         graph_data,
-        num_node_features: int,
-        num_classes: int = None,
-        lr: float = 1e-3,
-        weight_decay: float = 1e-5,
+        config: Hyperparameters,
         adata=None,
         registry=None,
-        **kwargs
+        **kwargs,
     ):
-        """
-        Initialize the GraphModel.
-
-        Args:
-            encoder: The encoder model (ANN, GCN, or GAT instance)
-            graph_data: PyTorch Geometric data object with x, edge_index, y, train_mask, val_mask
-            num_node_features: Number of input node features
-            num_classes: Number of output classes (None for regression)
-            lr: Learning rate
-            weight_decay: Weight decay for optimizer
-            adata: AnnData object (optional, for scvi-tools compatibility)
-            registry: Registry object (optional, for scvi-tools compatibility)
-        """
         super().__init__(adata=adata, registry=registry, **kwargs)
-
-        self.module = GraphEncoderModule(
-            encoder=encoder,
-            num_node_features=num_node_features,
-            num_classes=num_classes,
-            lr=lr,
-            weight_decay=weight_decay,
-        )
-
+        self.module = GraphEncoderModule(encoder, config)
         self.graph_data = graph_data
-        self.num_node_features = num_node_features
-        self.num_classes = num_classes
-        self.lr = lr
-        self.weight_decay = weight_decay
+        self.config = config
 
     @classmethod
     def setup_anndata(cls, adata, **kwargs):
-        """
-        Setup method for AnnData (required by scvi-tools BaseModelClass).
-        This registers the AnnData with the model class for scvi-tools compatibility.
-        """
         adata_manager = AnnDataManager(
-            fields=[
-                LayerField(registry_key="X", layer=None, is_count_data=False),
-            ],
+            fields=[LayerField(registry_key="X", layer=None, is_count_data=False)],
         )
         adata_manager.register_fields(adata, **kwargs)
         cls.register_manager(adata_manager)
@@ -274,143 +196,49 @@ class GraphModel(BaseModelClass):
 
     def train(
         self,
-        max_epochs: int = 400,
-        patience: int = 200,
+        max_epochs: int | None = None,
+        patience: int | None = None,
         check_val_every_n_epoch: int = 1,
-        **train_kwargs
+        **train_kwargs,
     ):
-        """
-        Train the model using PyTorch Lightning Trainer directly.
-
-        Args:
-            max_epochs: Maximum number of training epochs
-            patience: Early stopping patience
-            check_val_every_n_epoch: How often to run validation
-            **train_kwargs: Additional arguments for Trainer
-        """
         from pytorch_lightning import Trainer
         from pytorch_lightning.callbacks import EarlyStopping
 
-        training_plan = GraphTrainingPlan(
-            module=self.module,
-            graph_data=self.graph_data,
-            lr=self.lr,
-            weight_decay=self.weight_decay,
-        )
+        max_epochs = max_epochs if max_epochs is not None else self.config.epochs
+        patience = patience if patience is not None else self.config.patience
 
-        early_stop_callback = EarlyStopping(
-            monitor="val_loss",
-            patience=patience,
-            mode="min",
-        )
+        plan = GraphTrainingPlan(self.module, self.graph_data, self.config)
+        early_stop = EarlyStopping(monitor="val_loss", patience=patience, mode="min")
 
-        dummy_dataset = TensorDataset(torch.zeros(1))
-        dummy_loader = DataLoader(dummy_dataset, batch_size=1)
-
+        dummy = DataLoader(TensorDataset(torch.zeros(1)), batch_size=1)
         trainer = Trainer(
             max_epochs=max_epochs,
             check_val_every_n_epoch=check_val_every_n_epoch,
-            callbacks=[early_stop_callback],
+            callbacks=[early_stop],
             enable_progress_bar=True,
-            **train_kwargs
+            **train_kwargs,
         )
-
-        trainer.fit(training_plan, train_dataloaders=dummy_loader, val_dataloaders=dummy_loader)
+        trainer.fit(plan, train_dataloaders=dummy, val_dataloaders=dummy)
         return trainer
 
     def get_latent_representation(self, x=None, edge_index=None):
-        """
-        Get latent representation from the model.
-
-        Args:
-            x: Optional node features (uses graph_data.x if None)
-            edge_index: Optional edge index (uses graph_data.edge_index if None)
-
-        Returns:
-            latent: Latent representation
-        """
         if x is None:
             x = self.graph_data.x
         if edge_index is None:
             edge_index = self.graph_data.edge_index
-
         self.module.eval()
         with torch.no_grad():
-            output, outputs = self.module(x, edge_index)
-            if len(outputs) > 0:
-                return outputs[-1]
-            return output
+            _, outputs = self.module(x, edge_index)
+            return outputs[-1] if outputs else self.module(x, edge_index)[0]
 
     def predict(self, x=None, edge_index=None, mask=None):
-        """
-        Get predictions from the model.
-
-        Args:
-            x: Optional node features (uses graph_data.x if None)
-            edge_index: Optional edge index (uses graph_data.edge_index if None)
-            mask: Optional mask to select specific nodes
-
-        Returns:
-            predictions: Model predictions
-        """
         if x is None:
             x = self.graph_data.x
         if edge_index is None:
             edge_index = self.graph_data.edge_index
-
         self.module.eval()
         with torch.no_grad():
-            output, outputs = self.module(x, edge_index, mask=mask)
-            if self.num_classes is not None:
+            output, _ = self.module(x, edge_index, mask=mask)
+            if self.config.num_classes is not None:
                 return F.softmax(output, dim=-1) if mask is None else F.softmax(output[mask], dim=-1)
-            else:
-                return output if mask is None else output[mask]
-
-
-# def create_graph_model(
-#     method: str,
-#     map_df,
-#     graph_data,
-#     args,
-#     *,
-#     bias: bool = True,
-#     lr: float = 1e-3,
-#     weight_decay: float = 1e-5,
-#     adata=None,
-#     registry=None,
-#     **encoder_kwargs,
-# ) -> GraphModel:
-#     """
-#     Create a GraphModel by registered method name. Encoder options (e.g. heads for GAT) go in encoder_kwargs.
-
-#     Args:
-#         method: Registered name ("ANN", "GCN", "GAT"). Add more via GraphModelFactory.register(...).
-#         map_df: Pathway mapping dataframe
-#         graph_data: PyTorch Geometric data object
-#         args: Arguments with num_node_features, num_classes, etc.
-#         bias: Whether to use bias in layers
-#         lr: Learning rate
-#         weight_decay: Weight decay for optimizer
-#         adata: AnnData object (optional)
-#         registry: Registry object (optional)
-#         **encoder_kwargs: Passed to the encoder (e.g. heads=2 for GAT)
-
-#     Returns:
-#         GraphModel instance ready for training
-
-#     Examples:
-#         >>> model = create_graph_model("GCN", map_df, graph_data, args, adata=adata)
-#         >>> model = create_graph_model("GAT", map_df, graph_data, args, heads=2)
-#     """
-#     return GraphModelFactory.create(
-#         method=method,
-#         map_df=map_df,
-#         graph_data=graph_data,
-#         args=args,
-#         bias=bias,
-#         lr=lr,
-#         weight_decay=weight_decay,
-#         adata=adata,
-#         registry=registry,
-#         **encoder_kwargs,
-#     )
+            return output if mask is None else output[mask]

@@ -10,6 +10,7 @@ import seaborn as sns; sns.set_theme()
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 from data_utils import load_and_merge_tables, build_reactome_network, prepare_graph_data
+from nn import Hyperparameters
 from training_scvi import train_graph_model
 
 
@@ -102,48 +103,25 @@ def main() -> None:
     print(f"Number of classes: {len(data.y.unique())}")
     print(f"Pathway mapping shape: {map_df.shape}")
     
-    # Setup device
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-    print(f"Using device: {device}")
-    
-    # Training parameters
-    epochs = 400
-    patience = 200
-    lr = 1e-3
-    weight_decay = 1e-5
-    
-    num_node_features = data.num_node_features
-    num_classes = int(len(data.y.unique()))
-    
-    # Dictionary to store results
+    config = Hyperparameters(
+        num_node_features=data.num_node_features,
+        num_classes=int(len(data.y.unique())),
+        lr=1e-3,
+        w_decay=1e-5,
+        epochs=400,
+        patience=200,
+        bias=False,
+        heads=1,
+        save_dir="./train_data/weights",
+    )
+    print(f"Using device: {config.device}")
+
     results = {}
-    
-    methods = [
-        ("ANN", "./train_data/weights/ANN_scvi.pt"),
-        ("GCN", "./train_data/weights/GCN_scvi.pt"),
-        ("GAT", "./train_data/weights/GAT_scvi.pt"),
-    ]
-    for method, save_path in methods:
+    for name in ["ANN", "GCN", "GAT"]:
         print("\n" + "="*60)
-        print(f"Training {method} model...")
+        print(f"Training {name} model...")
         print("="*60)
-        kwargs = dict(
-            graph_data=data,
-            map_df=map_df,
-            num_node_features=num_node_features,
-            num_classes=num_classes,
-            device=device,
-            epochs=epochs,
-            patience=patience,
-            lr=lr,
-            weight_decay=weight_decay,
-            bias=False,
-            save_path=save_path,
-            adata=adata,
-        )
-        if method == "GAT":
-            kwargs["heads"] = 1
-        results[method] = train_graph_model(method, **kwargs)
+        results[name] = train_graph_model(name, data, map_df, config, adata=adata)
     
     # Compare performances on test set
     print("\n" + "="*60)
