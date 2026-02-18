@@ -10,7 +10,7 @@ import seaborn as sns; sns.set_theme()
 from sklearn.decomposition import PCA
 from sklearn.metrics import confusion_matrix
 from data_utils import load_and_merge_tables, build_reactome_network, prepare_graph_data
-from training_scvi import train_ann_model, train_gcn_model, train_gat_model
+from training_scvi import train_graph_model
 
 
 def evaluate_model(model, graph_data, mask):
@@ -118,66 +118,32 @@ def main() -> None:
     # Dictionary to store results
     results = {}
     
-    # Train ANN model
-    print("\n" + "="*60)
-    print("Training ANN model...")
-    print("="*60)
-    ann_model = train_ann_model(
-        graph_data=data,
-        map_df=map_df,
-        num_node_features=num_node_features,
-        num_classes=num_classes,
-        device=device,
-        epochs=epochs,
-        patience=patience,
-        lr=lr,
-        weight_decay=weight_decay,
-        bias=False,
-        save_path="./train_data/weights/ANN_scvi.pt",
-        adata=adata,
-    )
-    results['ANN'] = ann_model
-    
-    # Train GCN model
-    print("\n" + "="*60)
-    print("Training GCN model...")
-    print("="*60)
-    gcn_model = train_gcn_model(
-        graph_data=data,
-        map_df=map_df,
-        num_node_features=num_node_features,
-        num_classes=num_classes,
-        device=device,
-        epochs=epochs,
-        patience=patience,
-        lr=lr,
-        weight_decay=weight_decay,
-        bias=False,
-        save_path="./train_data/weights/GCN_scvi.pt",
-        adata=adata,
-    )
-    results['GCN'] = gcn_model
-    
-    # Train GAT model
-    print("\n" + "="*60)
-    print("Training GAT model...")
-    print("="*60)
-    gat_model = train_gat_model(
-        graph_data=data,
-        map_df=map_df,
-        num_node_features=num_node_features,
-        num_classes=num_classes,
-        device=device,
-        epochs=epochs,
-        patience=patience,
-        lr=lr,
-        weight_decay=weight_decay,
-        bias=False,
-        heads=1,
-        save_path="./train_data/weights/GAT_scvi.pt",
-        adata=adata,
-    )
-    results['GAT'] = gat_model
+    methods = [
+        ("ANN", "./train_data/weights/ANN_scvi.pt"),
+        ("GCN", "./train_data/weights/GCN_scvi.pt"),
+        ("GAT", "./train_data/weights/GAT_scvi.pt"),
+    ]
+    for method, save_path in methods:
+        print("\n" + "="*60)
+        print(f"Training {method} model...")
+        print("="*60)
+        kwargs = dict(
+            graph_data=data,
+            map_df=map_df,
+            num_node_features=num_node_features,
+            num_classes=num_classes,
+            device=device,
+            epochs=epochs,
+            patience=patience,
+            lr=lr,
+            weight_decay=weight_decay,
+            bias=False,
+            save_path=save_path,
+            adata=adata,
+        )
+        if method == "GAT":
+            kwargs["heads"] = 1
+        results[method] = train_graph_model(method, **kwargs)
     
     # Compare performances on test set
     print("\n" + "="*60)

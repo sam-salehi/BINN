@@ -23,18 +23,42 @@ from .models import Encoder, ANN, GCN, GAT
 class GraphModelFactory:
     """
     Registry-based factory for GraphModel. Register encoder classes by method name;
-    then create models with create_graph_model(method="GCN", ...) or create().
-    Encoder-specific options (e.g. heads for GAT) are passed as kwargs and forwarded
-    to the encoder constructor.
+    then create models with create() or create_graph_model(). Encoder-specific options
+    (e.g. heads for GAT) are passed as kwargs to create() and forwarded to the encoder.
+    Optional per-method args_method (for TrainingArgs) and train_kwargs (e.g. accelerator
+    for PyTorch Lightning) let training code stay method-agnostic.
     """
     _registry: dict[str, type] = {}
     _default_encoder_kwargs: dict[str, dict] = {}
+    _args_method: dict[str, str] = {}  # method name -> value for args.method (encoder assertion)
+    _train_kwargs: dict[str, dict] = {}  # method name -> extra kwargs for model.train()
 
     @classmethod
-    def register(cls, method: str, encoder_class: type, default_encoder_kwargs: dict | None = None):
-        """Register an encoder class under a method name (e.g. 'ANN', 'GCN', 'GAT')."""
+    def register(
+        cls,
+        method: str,
+        encoder_class: type,
+        default_encoder_kwargs: dict | None = None,
+        args_method: str | None = None,
+        train_kwargs: dict | None = None,
+    ):
+        """Register an encoder. args_method is the value for args.method; train_kwargs are passed to model.train()."""
         cls._registry[method] = encoder_class
         cls._default_encoder_kwargs[method] = dict(default_encoder_kwargs or {})
+        cls._args_method[method] = args_method if args_method is not None else method
+        cls._train_kwargs[method] = dict(train_kwargs or {})
+
+    @classmethod
+    def get_args_method(cls, method: str) -> str:
+        """Return the args.method value to use for this registered method."""
+        if method not in cls._registry:
+            raise ValueError(f"Unknown method {method!r}. Registered: {list(cls._registry)}")
+        return cls._args_method[method]
+
+    @classmethod
+    def get_train_kwargs(cls, method: str) -> dict:
+        """Return extra kwargs to pass to model.train() for this method (e.g. accelerator='cpu' for GAT)."""
+        return dict(cls._train_kwargs.get(method, {}))
 
     @classmethod
     def create(
@@ -70,9 +94,14 @@ class GraphModelFactory:
         )
 
 
-GraphModelFactory.register("ANN", ANN)
-GraphModelFactory.register("GCN", GCN)
-GraphModelFactory.register("GAT", GAT, default_encoder_kwargs={"heads": 1})
+GraphModelFactory.register("ANN", ANN, args_method="ANN")
+GraphModelFactory.register("GCN", GCN, args_method="GCNConv")
+GraphModelFactory.register(
+    "GAT", GAT,
+    default_encoder_kwargs={"heads": 1},
+    args_method="GATConv",
+    train_kwargs={"accelerator": "cpu"},  # MPS scatter ops not fully supported FIXME: figure out what this means.
+)
 
 
 class GraphEncoderModule(BaseModuleClass):

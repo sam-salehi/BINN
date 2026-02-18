@@ -1,11 +1,12 @@
 """
 Training module for graph models using scvi-tools BaseModelClass.
-This module provides functions to train models with PyTorch Lightning.
+Uses GraphModelFactory so one function trains any registered method (ANN, GCN, GAT, ...).
 """
 
 from typing import Optional
 import torch
 from nn import GraphModel, GraphModelFactory
+
 
 class TrainingArgs:
     """Arguments class for encoder compatibility (must be defined at module level for pickling)."""
@@ -17,12 +18,14 @@ class TrainingArgs:
         self.w_decay = w_decay
 
 
-def train_ann_model(
+def train_graph_model(
+    method: str,
     graph_data,
     map_df,
     num_node_features: int,
     num_classes: int,
     device: torch.device,
+    *,
     epochs: int = 400,
     patience: int = 200,
     lr: float = 1e-3,
@@ -31,90 +34,13 @@ def train_ann_model(
     save_path: Optional[str] = None,
     adata=None,
     registry=None,
+    **encoder_kwargs,
 ):
     """
-    Train an ANN model using scvi-tools BaseModelClass with PyTorch Lightning.
-    
-    Args:
-        graph_data: PyTorch Geometric data object with x, edge_index, y, train_mask, val_mask
-        map_df: Pathway mapping dataframe
-        num_node_features: Number of input node features
-        num_classes: Number of output classes
-        device: Torch device (CPU or CUDA)
-        epochs: Maximum number of training epochs
-        patience: Early stopping patience
-        lr: Learning rate
-        weight_decay: Weight decay for optimizer
-        bias: Whether to use bias in layers
-        save_path: Optional path to save the trained model
-    Returns:
-        Trained GraphModel instance
-    """
-    # Create args object for compatibility with encoder classes
-    args = TrainingArgs(
-        num_node_features=num_node_features,
-        num_classes=num_classes,
-        method="ANN",
-        lr=lr,
-        w_decay=weight_decay,
-    )
-    
-    # Note: Don't move graph_data to device here.
-    # PyTorch Lightning handles device management automatically.
-    # Data is moved to self.device in training_step/validation_step.
-    
-    # Setup AnnData with GraphModel if adata is provided
-    # This is required by scvi-tools BaseModelClass
-    if adata is not None:
-        GraphModel.setup_anndata(adata)
-    
-    model = GraphModelFactory.create(
-        method="ANN",
-        map_df=map_df,
-        graph_data=graph_data,
-        args=args,
-        bias=bias,
-        lr=lr,
-        weight_decay=weight_decay,
-        adata=adata,
-        registry=registry,
-    )
-    
-    print(f"Training ANN model for up to {epochs} epochs with patience {patience}...")
-    print(f"Using device: {device}")
-    model.train(
-        max_epochs=epochs,
-        patience=patience,
-        check_val_every_n_epoch=1,
-    )
-    
-    # Save model if path provided
-    if save_path:
-        print(f"Saving model to {save_path}")
-        torch.save(model, save_path)
-    
-    return model
+    Train a graph model by method name (ANN, GCN, GAT, or any registered encoder).
 
-
-def train_gcn_model(
-    graph_data,
-    map_df,
-    num_node_features: int,
-    num_classes: int,
-    device: torch.device,
-    epochs: int = 400,
-    patience: int = 200,
-    lr: float = 1e-3,
-    weight_decay: float = 1e-5,
-    bias: bool = False,
-    save_path: Optional[str] = None,
-    adata=None,
-    registry=None,
-):
-    """
-    Train a GCN (Graph Convolutional Network) model using scvi-tools BaseModelClass with PyTorch Lightning.
-    
     Args:
+        method: Registered name ("ANN", "GCN", "GAT"). Add more via GraphModelFactory.register(...).
         graph_data: PyTorch Geometric data object with x, edge_index, y, train_mask, val_mask
         map_df: Pathway mapping dataframe
         num_node_features: Number of input node features
@@ -127,25 +53,25 @@ def train_gcn_model(
         bias: Whether to use bias in layers
         save_path: Optional path to save the trained model
         adata: AnnData object (optional, for scvi-tools compatibility)
-        registry: Registry object (optional, for scvi-tools compatibility)
+        registry: Registry object (optional)
+        **encoder_kwargs: Passed to the encoder (e.g. heads=2 for GAT)
+
     Returns:
         Trained GraphModel instance
     """
-    # Create args object for compatibility with encoder classes
     args = TrainingArgs(
         num_node_features=num_node_features,
         num_classes=num_classes,
-        method="GCNConv",
+        method=GraphModelFactory.get_args_method(method),
         lr=lr,
         w_decay=weight_decay,
     )
-    
-    # Setup AnnData with GraphModel if adata is provided
+
     if adata is not None:
         GraphModel.setup_anndata(adata)
-    
+
     model = GraphModelFactory.create(
-        method="GCN",
+        method=method,
         map_df=map_df,
         graph_data=graph_data,
         args=args,
@@ -154,102 +80,26 @@ def train_gcn_model(
         weight_decay=weight_decay,
         adata=adata,
         registry=registry,
+        **encoder_kwargs,
     )
-    
-    print(f"Training GCN model for up to {epochs} epochs with patience {patience}...")
-    print(f"Using device: {device}")
-    model.train(
-        max_epochs=epochs,
-        patience=patience,
-        check_val_every_n_epoch=1,
-    )
-    
-    # Save model if path provided
+
+    train_kwargs = {
+        "max_epochs": epochs,
+        "patience": patience,
+        "check_val_every_n_epoch": 1,
+    }
+    train_kwargs.update(GraphModelFactory.get_train_kwargs(method))
+
+    device_msg = train_kwargs.get("accelerator", str(device))
+    print(f"Training {method} model for up to {epochs} epochs with patience {patience}...")
+    print(f"Using device: {device_msg}")
+    if encoder_kwargs:
+        print(f"Encoder kwargs: {encoder_kwargs}")
+
+    model.train(**train_kwargs)
+
     if save_path:
         print(f"Saving model to {save_path}")
         torch.save(model, save_path)
-    
+
     return model
-
-
-def train_gat_model(
-    graph_data,
-    map_df,
-    num_node_features: int,
-    num_classes: int,
-    device: torch.device,
-    epochs: int = 400,
-    patience: int = 200,
-    lr: float = 1e-3,
-    weight_decay: float = 1e-5,
-    bias: bool = False,
-    heads: int = 1,
-    save_path: Optional[str] = None,
-    adata=None,
-    registry=None,
-):
-    """
-    Train a GAT (Graph Attention Network) model using scvi-tools BaseModelClass with PyTorch Lightning.
-    
-    Args:
-        graph_data: PyTorch Geometric data object with x, edge_index, y, train_mask, val_mask
-        map_df: Pathway mapping dataframe
-        num_node_features: Number of input node features
-        num_classes: Number of output classes
-        device: Torch device (CPU or CUDA)
-        epochs: Maximum number of training epochs
-        patience: Early stopping patience
-        lr: Learning rate
-        weight_decay: Weight decay for optimizer
-        bias: Whether to use bias in layers
-        heads: Number of attention heads for GAT layers
-        save_path: Optional path to save the trained model
-        adata: AnnData object (optional, for scvi-tools compatibility)
-        registry: Registry object (optional, for scvi-tools compatibility)
-    Returns:
-        Trained GraphModel instance
-    """
-    # Create args object for compatibility with encoder classes
-    args = TrainingArgs(
-        num_node_features=num_node_features,
-        num_classes=num_classes,
-        method="GATConv",
-        lr=lr,
-        w_decay=weight_decay,
-    )
-    
-    # Setup AnnData with GraphModel if adata is provided
-    if adata is not None:
-        GraphModel.setup_anndata(adata)
-    
-    model = GraphModelFactory.create(
-        method="GAT",
-        map_df=map_df,
-        graph_data=graph_data,
-        args=args,
-        heads=heads,
-        bias=bias,
-        lr=lr,
-        weight_decay=weight_decay,
-        adata=adata,
-        registry=registry,
-    )
-    
-    # Note: GAT uses scatter operations that aren't fully supported on MPS (Apple Metal),
-    # so we force CPU training to avoid crashes
-    print(f"Training GAT model for up to {epochs} epochs with patience {patience}...")
-    print(f"Using device: cpu (forced - MPS scatter ops not supported) | Attention heads: {heads}")
-    model.train(
-        max_epochs=epochs,
-        patience=patience,
-        check_val_every_n_epoch=1,
-        accelerator="cpu",  # Force CPU to avoid MPS scatter operation issues
-    )
-    
-    # Save model if path provided
-    if save_path:
-        print(f"Saving model to {save_path}")
-        torch.save(model, save_path)
-    
-    return model
-
