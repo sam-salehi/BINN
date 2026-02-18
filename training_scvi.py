@@ -5,7 +5,7 @@ This module provides functions to train models with PyTorch Lightning.
 
 from typing import Optional
 import torch
-from encoder import ANN, GCN, GAT, create_graph_model
+from nn import GraphModel, GraphModelFactory
 
 class TrainingArgs:
     """Arguments class for encoder compatibility (must be defined at module level for pickling)."""
@@ -66,12 +66,10 @@ def train_ann_model(
     # Setup AnnData with GraphModel if adata is provided
     # This is required by scvi-tools BaseModelClass
     if adata is not None:
-        from encoder import GraphModel
         GraphModel.setup_anndata(adata)
     
-    # Create the model using the helper function
-    model = create_graph_model(
-        encoder_class=ANN,
+    model = GraphModelFactory.create(
+        method="ANN",
         map_df=map_df,
         graph_data=graph_data,
         args=args,
@@ -82,7 +80,6 @@ def train_ann_model(
         registry=registry,
     )
     
-    # Train the model (PyTorch Lightning handles device management)
     print(f"Training ANN model for up to {epochs} epochs with patience {patience}...")
     print(f"Using device: {device}")
     model.train(
@@ -145,12 +142,10 @@ def train_gcn_model(
     
     # Setup AnnData with GraphModel if adata is provided
     if adata is not None:
-        from encoder import GraphModel
         GraphModel.setup_anndata(adata)
     
-    # Create the model using the helper function
-    model = create_graph_model(
-        encoder_class=GCN,
+    model = GraphModelFactory.create(
+        method="GCN",
         map_df=map_df,
         graph_data=graph_data,
         args=args,
@@ -161,7 +156,6 @@ def train_gcn_model(
         registry=registry,
     )
     
-    # Train the model
     print(f"Training GCN model for up to {epochs} epochs with patience {patience}...")
     print(f"Using device: {device}")
     model.train(
@@ -226,27 +220,21 @@ def train_gat_model(
     
     # Setup AnnData with GraphModel if adata is provided
     if adata is not None:
-        from encoder import GraphModel
         GraphModel.setup_anndata(adata)
     
-    # Create the model using the helper function
-    # Note: GAT encoder accepts heads parameter, but create_graph_model doesn't pass it
-    # We create the encoder directly to support the heads parameter
-    encoder = GAT(map_df, args=args, bias=bias, heads=heads)
-    
-    from encoder import GraphModel
-    model = GraphModel(
-        encoder=encoder,
+    model = GraphModelFactory.create(
+        method="GAT",
+        map_df=map_df,
         graph_data=graph_data,
-        num_node_features=num_node_features,
-        num_classes=num_classes,
+        args=args,
+        heads=heads,
+        bias=bias,
         lr=lr,
         weight_decay=weight_decay,
         adata=adata,
         registry=registry,
     )
     
-    # Train the model
     # Note: GAT uses scatter operations that aren't fully supported on MPS (Apple Metal),
     # so we force CPU training to avoid crashes
     print(f"Training GAT model for up to {epochs} epochs with patience {patience}...")

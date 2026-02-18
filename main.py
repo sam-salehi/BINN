@@ -73,7 +73,7 @@ def _plot_last_layer_weights(model, title: str) -> None:
 def main() -> None:
     """Main function to train and compare ANN, GCN, and GAT models."""
     # Data directory setup
-    data_dir = "data"
+    data_dir = "train_data"
     reactome_dir = os.path.join(data_dir, "reactome")
     
     # Define clinical variables and observation variables
@@ -133,7 +133,7 @@ def main() -> None:
         lr=lr,
         weight_decay=weight_decay,
         bias=False,
-        save_path="./data/weights/ANN_scvi.pt",
+        save_path="./train_data/weights/ANN_scvi.pt",
         adata=adata,
     )
     results['ANN'] = ann_model
@@ -153,7 +153,7 @@ def main() -> None:
         lr=lr,
         weight_decay=weight_decay,
         bias=False,
-        save_path="./data/weights/GCN_scvi.pt",
+        save_path="./train_data/weights/GCN_scvi.pt",
         adata=adata,
     )
     results['GCN'] = gcn_model
@@ -174,7 +174,7 @@ def main() -> None:
         weight_decay=weight_decay,
         bias=False,
         heads=1,
-        save_path="./data/weights/GAT_scvi.pt",
+        save_path="./train_data/weights/GAT_scvi.pt",
         adata=adata,
     )
     results['GAT'] = gat_model
@@ -197,9 +197,7 @@ def main() -> None:
     else:
         print("Warning: No test_mask found in data. Cannot evaluate on test set.")
     
-    # ------------------------------------------------------------
-    # Interpretability (modeled after legacy main.py 69-82)
-    # ------------------------------------------------------------
+  
     print("\n" + "="*60)
     print("Interpretability visualizations")
     print("="*60)

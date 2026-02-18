@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from typing import Tuple, List
 
-from bruno.data import ReactomeNetwork, PrepareAnnData, AnnDataToGraphData, get_map
+from data import ReactomeNetwork, PrepareAnnData, AnnDataToGraphData, get_map
 from torch_geometric.transforms import RandomNodeSplit
 
 
